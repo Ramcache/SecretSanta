@@ -119,6 +119,15 @@ func (b *Bot) handleAssignCommand(msg *tgbotapi.Message) {
 	}
 
 	b.sendReply(msg.Chat.ID, "Назначения завершены! Каждый получил имя своего Тайного Санты через бота.")
+
+	// Очистка базы данных для текущего чата
+	err = b.DB.ClearUsersForChat(msg.Chat.ID)
+	if err != nil {
+		log.Printf("Ошибка при очистке базы данных для группы %d: %v", msg.Chat.ID, err)
+		b.sendReply(msg.Chat.ID, "Ошибка при очистке базы данных. Пожалуйста, обратитесь к администратору.")
+	} else {
+		log.Printf("Участники для группы %d успешно удалены из базы данных.", msg.Chat.ID)
+	}
 }
 
 func (b *Bot) sendReply(chatID int64, message string) {
