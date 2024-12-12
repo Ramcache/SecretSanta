@@ -15,7 +15,7 @@
 
 ### 1. Клонирование репозитория
 ```bash
-git clone <URL_репозитория>
+git clone https://github.com/Ramcache/SecretSanta
 cd SecretSantaBot
 ```
 
