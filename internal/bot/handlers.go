@@ -48,6 +48,9 @@ func (b *Bot) HandleMessage(msg *tgbotapi.Message) {
 		b.handleListUsersCommand(msg)
 	case "help":
 		b.handleHelpCommand(msg)
+	case "reset_game":
+		b.handleResetGameCommand(msg)
+
 	default:
 		b.sendReply(msg.Chat.ID, "Неизвестная команда. Используйте /help для получения списка команд.")
 	}
@@ -157,15 +160,13 @@ func (b *Bot) handleRegisterButtonCommand(msg *tgbotapi.Message) {
 }
 
 func (b *Bot) handleNameInput(msg *tgbotapi.Message) {
-	// Проверяем состояние пользователя
 	state, exists := b.UserStates[msg.From.ID]
 	if !exists || !strings.HasPrefix(state, "awaiting_name_") {
-		b.sendReply(msg.Chat.ID, "Ошибка: ваше имя не ожидается. Используйте /register.")
+		b.sendReply(msg.Chat.ID, "Ошибка: ваше имя не ожидается.")
 		log.Printf("State not found or unsupported for user %d: %v", msg.From.ID, state)
 		return
 	}
 
-	// Извлекаем ID группы из состояния
 	groupID, err := strconv.ParseInt(strings.TrimPrefix(state, "awaiting_name_"), 10, 64)
 	if err != nil {
 		b.sendReply(msg.Chat.ID, "Ошибка: некорректный ID группы.")
@@ -173,7 +174,6 @@ func (b *Bot) handleNameInput(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Регистрируем пользователя
 	err = b.DB.AddUser(msg.From.ID, groupID, msg.Text)
 	if err != nil {
 		b.sendReply(msg.Chat.ID, "Ошибка при регистрации. Попробуйте позже.")
@@ -181,14 +181,11 @@ func (b *Bot) handleNameInput(msg *tgbotapi.Message) {
 		return
 	}
 
-	// Отправляем подтверждение
 	b.sendReply(msg.Chat.ID, fmt.Sprintf("Вы успешно зарегистрировались как %s!", msg.Text))
 
-	// Отправляем сообщение в группу
 	announcement := fmt.Sprintf("Пользователь %s успешно зарегистрировался!", msg.Text)
 	b.sendReply(groupID, announcement)
 
-	// Сбрасываем состояние
 	delete(b.UserStates, msg.From.ID)
 }
 
@@ -237,6 +234,15 @@ func (b *Bot) isUserAdmin(userID int64, chatID int64) (bool, error) {
 	return false, nil
 }
 
+func (b *Bot) handleResetGameCommand(msg *tgbotapi.Message) {
+	if err := b.DB.ClearUsersForChat(msg.Chat.ID); err != nil {
+		b.sendReply(msg.Chat.ID, "Ошибка при сбросе игры. Попробуйте позже.")
+		log.Printf("Ошибка сброса игры: %v", err)
+		return
+	}
+	b.sendReply(msg.Chat.ID, "Игра успешно сброшена. Вы можете начать заново.")
+}
+
 func (b *Bot) handleHelpCommand(msg *tgbotapi.Message) {
 	helpMessage := `
 Добро пожаловать! Вот список доступных команд:
@@ -245,6 +251,7 @@ func (b *Bot) handleHelpCommand(msg *tgbotapi.Message) {
 /assign - Назначить Тайного Санту.
 /list_users - Показать список зарегистрированных пользователей.
 /help - Показать это сообщение.
+/reset_game - Сброс игры.
 
 Если у вас возникли вопросы, обратитесь к администратору группы.
     `
