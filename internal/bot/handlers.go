@@ -9,24 +9,47 @@ import (
 	"strings"
 )
 
+var restrictedCommandsInGroups = map[string]bool{
+	"start":  true,
+	"assign": true,
+}
+
 func (b *Bot) HandleMessage(msg *tgbotapi.Message) {
 	if !msg.IsCommand() {
-		return
+		return // Игнорируем сообщения, которые не являются командами
 	}
 
+	// Ограничение для групп
+	if msg.Chat.IsGroup() || msg.Chat.IsSuperGroup() {
+		if restrictedCommandsInGroups[msg.Command()] {
+			isAdmin, err := b.isUserAdmin(msg.From.ID, msg.Chat.ID)
+			if err != nil {
+				log.Printf("Error checking admin status: %v", err)
+				b.sendReply(msg.Chat.ID, "Не удалось проверить права администратора. Попробуйте позже.")
+				return
+			}
+
+			if !isAdmin {
+				b.sendReply(msg.Chat.ID, "Эта команда доступна только администраторам группы.")
+				return
+			}
+		}
+	}
+
+	// Обработка команд
 	switch msg.Command() {
 	case "start":
 		b.handleStartCommand(msg)
-	case "register":
-		b.handleRegisterCommand(msg)
 	case "assign":
 		b.handleAssignCommand(msg)
 	case "register_button":
 		b.handleRegisterButtonCommand(msg)
 	case "list_users":
 		b.handleListUsersCommand(msg)
+	case "help":
+		b.handleHelpCommand(msg)
 	default:
-		b.sendReply(msg.Chat.ID, "Неизвестная команда. Используйте /start, /register, /assign, /register_button.")
+		b.sendReply(msg.Chat.ID, "Неизвестная команда. Используйте /help для получения списка команд.")
 	}
 }
 
@@ -50,14 +73,6 @@ func (b *Bot) handleStartCommand(msg *tgbotapi.Message) {
 	}
 
 	b.sendReply(msg.Chat.ID, "Добро пожаловать! Используйте команды бота.")
-}
-
-func (b *Bot) handleRegisterCommand(msg *tgbotapi.Message) {
-	// Устанавливаем состояние для пользователя
-	b.UserStates[msg.From.ID] = "awaiting_name"
-
-	// Отправляем сообщение с просьбой ввести имя
-	b.sendReply(msg.Chat.ID, "Пожалуйста, напишите ваше имя для регистрации.")
 }
 
 func (b *Bot) handleAssignCommand(msg *tgbotapi.Message) {
@@ -196,4 +211,42 @@ func (b *Bot) handleListUsersCommand(msg *tgbotapi.Message) {
 	}
 
 	b.sendReply(msg.Chat.ID, reply)
+}
+
+func (b *Bot) isUserAdmin(userID int64, chatID int64) (bool, error) {
+	// Создаем конфигурацию для получения администраторов
+	config := tgbotapi.ChatAdministratorsConfig{
+		ChatConfig: tgbotapi.ChatConfig{
+			ChatID: chatID,
+		},
+	}
+
+	// Получаем список администраторов
+	admins, err := b.TelegramBot.GetChatAdministrators(config)
+	if err != nil {
+		return false, err
+	}
+
+	// Проверяем, есть ли пользователь среди администраторов
+	for _, admin := range admins {
+		if admin.User.ID == userID {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (b *Bot) handleHelpCommand(msg *tgbotapi.Message) {
+	helpMessage := `
+Добро пожаловать! Вот список доступных команд:
+
+/register_button - Отправить кнопку регистрации в группу .
+/assign - Назначить Тайного Санту.
+/list_users - Показать список зарегистрированных пользователей.
+/help - Показать это сообщение.
+
+Если у вас возникли вопросы, обратитесь к администратору группы.
+    `
+	b.sendReply(msg.Chat.ID, helpMessage)
 }
