@@ -4,11 +4,13 @@ import (
 	"SecretSanta/internal/db"
 	"github.com/go-telegram-bot-api/telegram-bot-api/v5"
 	"log"
+	"strings"
 )
 
 type Bot struct {
 	TelegramBot *tgbotapi.BotAPI
 	DB          *db.DB
+	UserStates  map[int64]string // Состояния пользователей, ключ — Telegram ID
 }
 
 func NewBot(token string, database *db.DB) (*Bot, error) {
@@ -20,7 +22,9 @@ func NewBot(token string, database *db.DB) (*Bot, error) {
 	return &Bot{
 		TelegramBot: bot,
 		DB:          database,
+		UserStates:  make(map[int64]string),
 	}, nil
+
 }
 
 func (b *Bot) Run() {
@@ -31,7 +35,20 @@ func (b *Bot) Run() {
 
 	for update := range updates {
 		if update.Message != nil {
-			b.HandleMessage(update.Message)
+			// Проверяем состояние пользователя
+			if state, exists := b.UserStates[update.Message.From.ID]; exists {
+				log.Printf("User %d state: %s", update.Message.From.ID, state)
+				if state == "awaiting_name" || strings.HasPrefix(state, "awaiting_name_") {
+					b.handleNameInput(update.Message)
+					delete(b.UserStates, update.Message.From.ID) // Сбрасываем состояние
+				} else {
+					b.sendReply(update.Message.Chat.ID, "Неподдерживаемое состояние.")
+				}
+			} else {
+				// Обрабатываем команды
+				b.HandleMessage(update.Message)
+			}
+
 		}
 	}
 }

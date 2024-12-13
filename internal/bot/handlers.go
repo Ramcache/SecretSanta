@@ -23,6 +23,8 @@ func (b *Bot) HandleMessage(msg *tgbotapi.Message) {
 		b.handleAssignCommand(msg)
 	case "register_button":
 		b.handleRegisterButtonCommand(msg)
+	case "list_users":
+		b.handleListUsersCommand(msg)
 	default:
 		b.sendReply(msg.Chat.ID, "Неизвестная команда. Используйте /start, /register, /assign, /register_button.")
 	}
@@ -31,50 +33,31 @@ func (b *Bot) HandleMessage(msg *tgbotapi.Message) {
 func (b *Bot) handleStartCommand(msg *tgbotapi.Message) {
 	args := msg.CommandArguments()
 
-	var groupID int64
-	if args != "" && strings.HasPrefix(args, "group_") {
-		parsedID, err := strconv.ParseInt(strings.TrimPrefix(args, "group_"), 10, 64)
-		if err == nil {
-			groupID = parsedID
-		} else {
+	if strings.HasPrefix(args, "register_group_") {
+		// Извлекаем ID группы
+		groupID, err := strconv.ParseInt(strings.TrimPrefix(args, "register_group_"), 10, 64)
+		if err != nil {
+			b.sendReply(msg.Chat.ID, "Ошибка: некорректный ID группы.")
 			log.Printf("Failed to parse group ID: %v", err)
+			return
 		}
+
+		// Сохраняем ID группы в состоянии пользователя
+		b.UserStates[msg.From.ID] = fmt.Sprintf("awaiting_name_%d", groupID)
+		log.Printf("Set state for user %d: awaiting_name_%d", msg.From.ID, groupID)
+		b.sendReply(msg.Chat.ID, "Пожалуйста, напишите своё имя для регистрации.")
+		return
 	}
 
-	if groupID != 0 {
-		reply := fmt.Sprintf("Вы пришли из группы с ID %d. Вернитесь, чтобы продолжить игру.", groupID)
-
-		groupLink := fmt.Sprintf("https://t.me/c/%d", groupID) // Пример ссылки для возврата
-		returnButton := tgbotapi.NewInlineKeyboardButtonURL("Вернуться в группу", groupLink)
-		keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(returnButton))
-
-		msg := tgbotapi.NewMessage(msg.Chat.ID, reply)
-		msg.ReplyMarkup = keyboard
-
-		if _, err := b.TelegramBot.Send(msg); err != nil {
-			log.Printf("Failed to send return button: %v", err)
-		}
-	} else {
-		// Если параметр не передан, показываем стандартное сообщение
-		b.sendReply(msg.Chat.ID, "Добро пожаловать в Тайный Санта! Перейдите в группу для регистрации.")
-	}
+	b.sendReply(msg.Chat.ID, "Добро пожаловать! Используйте команды бота.")
 }
 
 func (b *Bot) handleRegisterCommand(msg *tgbotapi.Message) {
-	args := msg.CommandArguments()
-	if args == "" {
-		b.sendReply(msg.Chat.ID, "Пожалуйста, укажите имя после команды /register.")
-		return
-	}
+	// Устанавливаем состояние для пользователя
+	b.UserStates[msg.From.ID] = "awaiting_name"
 
-	err := b.DB.AddUser(msg.From.ID, msg.Chat.ID, args)
-	if err != nil {
-		b.sendReply(msg.Chat.ID, "Не удалось зарегистрироваться. Попробуйте позже.")
-		log.Printf("Error registering user: %v", err)
-		return
-	}
-
-	b.sendReply(msg.Chat.ID, fmt.Sprintf("Вы успешно зарегистрировались как %s!", args))
+	// Отправляем сообщение с просьбой ввести имя
+	b.sendReply(msg.Chat.ID, "Пожалуйста, напишите ваше имя для регистрации.")
 }
 
 func (b *Bot) handleAssignCommand(msg *tgbotapi.Message) {
@@ -139,17 +122,78 @@ func (b *Bot) sendReply(chatID int64, message string) {
 }
 
 func (b *Bot) handleRegisterButtonCommand(msg *tgbotapi.Message) {
-	botUsername := b.TelegramBot.Self.UserName // Получаем имя бота
+	botUsername := b.TelegramBot.Self.UserName
+	groupID := msg.Chat.ID // ID группы, откуда нажимается кнопка
 
-	// Создаем кнопку с ссылкой на бота
-	registerButton := tgbotapi.NewInlineKeyboardButtonURL("Регистрация", fmt.Sprintf("https://t.me/%s?start=register", botUsername))
+	// Создаем кнопку с передачей ID группы
+	registerButton := tgbotapi.NewInlineKeyboardButtonURL(
+		"Зарегистрироваться",
+		fmt.Sprintf("https://t.me/%s?start=register_group_%d", botUsername, groupID),
+	)
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(registerButton))
 
 	// Отправляем сообщение с кнопкой
-	reply := tgbotapi.NewMessage(msg.Chat.ID, "Для регистрации, нажмите на кнопку ниже и запустите бота. После запуска вернитесь в групп и напишите /register <ваше имя>")
+	reply := tgbotapi.NewMessage(msg.Chat.ID, "Для регистрации нажмите кнопку ниже.")
 	reply.ReplyMarkup = keyboard
 
 	if _, err := b.TelegramBot.Send(reply); err != nil {
 		log.Printf("Failed to send registration button: %v", err)
 	}
+}
+
+func (b *Bot) handleNameInput(msg *tgbotapi.Message) {
+	// Проверяем состояние пользователя
+	state, exists := b.UserStates[msg.From.ID]
+	if !exists || !strings.HasPrefix(state, "awaiting_name_") {
+		b.sendReply(msg.Chat.ID, "Ошибка: ваше имя не ожидается. Используйте /register.")
+		log.Printf("State not found or unsupported for user %d: %v", msg.From.ID, state)
+		return
+	}
+
+	// Извлекаем ID группы из состояния
+	groupID, err := strconv.ParseInt(strings.TrimPrefix(state, "awaiting_name_"), 10, 64)
+	if err != nil {
+		b.sendReply(msg.Chat.ID, "Ошибка: некорректный ID группы.")
+		log.Printf("Failed to parse group ID from state: %v", err)
+		return
+	}
+
+	// Регистрируем пользователя
+	err = b.DB.AddUser(msg.From.ID, groupID, msg.Text)
+	if err != nil {
+		b.sendReply(msg.Chat.ID, "Ошибка при регистрации. Попробуйте позже.")
+		log.Printf("Error registering user: %v", err)
+		return
+	}
+
+	// Отправляем подтверждение
+	b.sendReply(msg.Chat.ID, fmt.Sprintf("Вы успешно зарегистрировались как %s!", msg.Text))
+
+	// Отправляем сообщение в группу
+	announcement := fmt.Sprintf("Пользователь %s успешно зарегистрировался!", msg.Text)
+	b.sendReply(groupID, announcement)
+
+	// Сбрасываем состояние
+	delete(b.UserStates, msg.From.ID)
+}
+
+func (b *Bot) handleListUsersCommand(msg *tgbotapi.Message) {
+	users, err := b.DB.GetUnassignedUsers(msg.Chat.ID)
+	if err != nil {
+		b.sendReply(msg.Chat.ID, "Ошибка при получении списка пользователей.")
+		log.Printf("Error fetching users: %v", err)
+		return
+	}
+
+	if len(users) == 0 {
+		b.sendReply(msg.Chat.ID, "Нет доступных пользователей.")
+		return
+	}
+
+	reply := "Список участников:\n"
+	for _, user := range users {
+		reply += fmt.Sprintf("- %s (Telegram ID: %d)\n", user.Name, user.TelegramID)
+	}
+
+	b.sendReply(msg.Chat.ID, reply)
 }
